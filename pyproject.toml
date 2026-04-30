@@ -1,0 +1,15 @@
+[project]
+name = "sandbox-tinker"
+version = "0.1.0"
+description = "Experiments for fine-tuning Tinker models."
+requires-python = ">=3.11"
+dependencies = [
+    "datasets>=4.0.0",
+    "orjson>=3.10.0",
+    "python-dotenv>=1.0.0",
+    "tinker",
+    "tinker-cookbook",
+]
+
+[tool.uv]
+package = false
