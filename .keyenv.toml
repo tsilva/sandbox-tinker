@@ -1,0 +1,7 @@
+# Credential references only. Store values with `keyenv set ENV_NAME`.
+[keyenv]
+version = 1
+
+[secrets.TINKER_API_KEY]
+account = "sandbox-tinker/TINKER_API_KEY"
+required = true
