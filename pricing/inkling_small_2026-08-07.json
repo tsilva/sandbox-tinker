@@ -1,0 +1,13 @@
+{
+  "retrieved_at": "2026-08-07T10:02:12Z",
+  "source_url": "https://tinker-docs.thinkingmachines.ai/tinker/models.json",
+  "model": {
+    "cached_prefill_usd_per_million": 0.116,
+    "context": "64K",
+    "note": "Limited-time 50% discount",
+    "prefill_usd_per_million": 0.58,
+    "sample_usd_per_million": 1.44,
+    "tinker_id": "thinkingmachines/Inkling-Small",
+    "train_usd_per_million": 1.73
+  }
+}

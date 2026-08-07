@@ -1,0 +1,48 @@
+[experiment]
+id = "inkling-small-banking77-v1"
+
+[model]
+name = "thinkingmachines/Inkling-Small"
+effort = 0.0
+
+[data]
+name = "tsilva/banking77"
+revision = "4235e96197daaaf23a9e278d3cbce078de7fee36"
+train_split = "train"
+test_split = "test"
+expected_train_rows = 9993
+expected_test_rows = 3076
+expected_labels = 77
+expected_quarantined_test_leaks = 7
+dev_per_label = 10
+split_seed = 13
+pilot_per_label = 8
+scale_per_label = 24
+
+[training]
+lora_rank = 32
+batch_size = 16
+epochs = 3
+max_length = 2048
+learning_rates = [5e-5, 2e-4, 8e-4]
+lr_schedule = "linear"
+warmup_ratio = 0.03
+seeds = [13, 17, 29]
+
+[evaluation]
+sample_concurrency = 24
+max_tokens = 32
+retry_attempts = 3
+bootstrap_replicates = 10000
+bootstrap_seed = 20260807
+min_bootstrap_macro_f1_delta = 0.0
+max_invalid_rate_increase = 0.01
+max_generated_tokens_ratio = 1.25
+max_p95_latency_ratio = 1.25
+latency_examples_per_label = 2
+latency_warmups_per_arm = 10
+
+[paths]
+run_root = "../runs"
+price_snapshot = "../pricing/inkling_small_2026-08-07.json"
+pricing_url = "https://tinker-docs.thinkingmachines.ai/tinker/models.json"

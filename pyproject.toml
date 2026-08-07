@@ -5,10 +5,15 @@ description = "Experiments for fine-tuning Tinker models."
 requires-python = ">=3.11"
 dependencies = [
     "datasets>=4.0.0",
-    "orjson>=3.10.0",
     "python-dotenv>=1.0.0",
     "tinker",
-    "tinker-cookbook",
+    "tinker-cookbook[inkling]>=0.5.3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+    "ruff>=0.12.0",
 ]
 
 [tool.uv]
@@ -18,3 +23,14 @@ constraint-dependencies = [
   "guardrails-ai!=0.10.1",
 ]
 package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
