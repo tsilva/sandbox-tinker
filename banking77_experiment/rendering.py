@@ -11,6 +11,8 @@ from tinker_cookbook.supervised.common import datum_from_model_input_weights
 from .data import Example
 from .metrics import strict_label, tolerant_label
 
+PROMPT_VARIANTS = ("full_taxonomy", "compact")
+
 
 @dataclass(frozen=True)
 class ParsedSample:
@@ -22,9 +24,26 @@ class ParsedSample:
     generated_tokens: int
 
 
-def messages_for(example: Example, include_answer: bool) -> list[renderers.Message]:
+def system_prompt(labels: tuple[str, ...], prompt_variant: str, compact_system_prompt: str) -> str:
+    if prompt_variant == "compact":
+        return compact_system_prompt
+    if prompt_variant == "full_taxonomy":
+        return compact_system_prompt + "\n\nAllowed labels:\n" + "\n".join(labels)
+    raise ValueError(f"Unsupported prompt variant: {prompt_variant!r}")
+
+
+def messages_for(
+    example: Example,
+    labels: tuple[str, ...],
+    prompt_variant: str,
+    compact_system_prompt: str,
+    include_answer: bool,
+) -> list[renderers.Message]:
     messages: list[renderers.Message] = [
-        {"role": "system", "content": example.system_prompt},
+        {
+            "role": "system",
+            "content": system_prompt(labels, prompt_variant, compact_system_prompt),
+        },
         {"role": "user", "content": example.text},
     ]
     if include_answer:
@@ -43,11 +62,23 @@ def make_renderer(
 
 
 def generation_prompt(
-    renderer: renderers.Renderer, example: Example, effort: float
+    renderer: renderers.Renderer,
+    example: Example,
+    labels: tuple[str, ...],
+    prompt_variant: str,
+    compact_system_prompt: str,
+    effort: float,
 ) -> tinker.ModelInput:
     # TmlV0Renderer extends the base protocol with explicit effort conditioning.
     return renderer.build_generation_prompt(
-        messages_for(example, include_answer=False), effort=effort
+        messages_for(
+            example,
+            labels,
+            prompt_variant,
+            compact_system_prompt,
+            include_answer=False,
+        ),
+        effort=effort,
     )  # type: ignore[call-arg]
 
 
@@ -55,11 +86,20 @@ def training_datum(
     renderer: renderers.Renderer,
     tokenizer: Any,
     example: Example,
+    labels: tuple[str, ...],
+    prompt_variant: str,
+    compact_system_prompt: str,
     effort: float,
     max_length: int,
 ) -> tuple[tinker.Datum, int]:
     model_input, weights = renderer.build_supervised_example(  # type: ignore[call-arg]
-        messages_for(example, include_answer=True),
+        messages_for(
+            example,
+            labels,
+            prompt_variant,
+            compact_system_prompt,
+            include_answer=True,
+        ),
         train_on_what=TrainOnWhat.LAST_ASSISTANT_MESSAGE,
         effort=effort,
     )

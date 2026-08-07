@@ -28,7 +28,7 @@ def test_resume_rejects_changed_contract_before_sampling(tmp_path):
             "partition_hash": "partition",
         },
     )
-    example = Example("a", "dev", 0, "text", 0, "label", "prompt")
+    example = Example("a", "dev", 0, "text", 0, "label")
     spec = EvaluationSpec(
         target_name="new-target",
         model_name="model",
@@ -39,6 +39,7 @@ def test_resume_rejects_changed_contract_before_sampling(tmp_path):
         retry_attempts=1,
         config_hash="cfg",
         partition_hash="partition",
+        compact_system_prompt="Return the Banking77 label.",
     )
     with pytest.raises(ValueError, match="violates the evaluation contract"):
         asyncio.run(

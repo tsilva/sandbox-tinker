@@ -33,6 +33,7 @@ class EvaluationSpec:
     retry_attempts: int
     config_hash: str
     partition_hash: str
+    compact_system_prompt: str
     prompt_variant: str = "full_taxonomy"
 
 
@@ -108,7 +109,14 @@ async def evaluate_rows(
     async def predict(example: Example) -> None:
         if example.example_id in completed:
             return
-        prompt = generation_prompt(renderer, example, spec.effort)
+        prompt = generation_prompt(
+            renderer,
+            example,
+            labels,
+            spec.prompt_variant,
+            spec.compact_system_prompt,
+            spec.effort,
+        )
         prompt_tokens = len(prompt.to_ints())
         attempts: list[dict[str, Any]] = []
         for attempt in range(1, spec.retry_attempts + 1):
@@ -197,6 +205,7 @@ async def evaluate_rows(
         "checkpoint_path": spec.checkpoint_path,
         "effort": spec.effort,
         "max_tokens": spec.max_tokens,
+        "prompt_variant": spec.prompt_variant,
         "coverage": 1.0,
         "prompt_tokens": prompt_tokens,
         "generated_tokens": generated_tokens,

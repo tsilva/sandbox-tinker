@@ -1,4 +1,4 @@
-"""Compare a base run with three adapter seeds and freeze the final test plan."""
+"""Compare full/compact base controls with compact-prompt adapter seeds."""
 
 from __future__ import annotations
 
@@ -27,19 +27,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--partition", choices=("dev", "test"), default="dev")
     parser.add_argument("--test-plan", default=None)
-    parser.add_argument("--base-predictions", required=True)
     parser.add_argument(
-        "--adapter-predictions",
-        action="append",
+        "--base-full-predictions",
+        "--base-predictions",
+        dest="base_full_predictions",
         required=True,
-        metavar="SEED=PATH",
     )
+    parser.add_argument("--base-compact-predictions", required=True)
     parser.add_argument(
-        "--adapter-selection",
-        action="append",
-        default=[],
-        metavar="SEED=PATH",
+        "--adapter-predictions", action="append", required=True, metavar="SEED=PATH"
     )
+    parser.add_argument("--adapter-selection", action="append", default=[], metavar="SEED=PATH")
     parser.add_argument("--latency-summary", default=None)
     parser.add_argument("--output", required=True)
     parser.add_argument("--freeze-test-plan", default=None)
@@ -67,17 +65,26 @@ def _load_records(
     partition_hash: str,
     effort: float,
     max_tokens: int,
+    prompt_variant: str,
 ) -> dict[str, dict[str, Any]]:
     records = successful_records_by_id(path)
     if not records:
         raise ValueError(f"No completed predictions in {path}")
+    expected = {
+        "config_hash": config_hash,
+        "partition_hash": partition_hash,
+        "effort": effort,
+        "max_tokens": max_tokens,
+        "prompt_variant": prompt_variant,
+    }
     for record in records.values():
-        if record.get("config_hash") != config_hash:
-            raise ValueError(f"Config hash mismatch in {path}")
-        if record.get("partition_hash") != partition_hash:
-            raise ValueError(f"Partition hash mismatch in {path}")
-        if record.get("effort") != effort or record.get("max_tokens") != max_tokens:
-            raise ValueError(f"Primary decoding contract mismatch in {path}")
+        mismatches = {
+            key: (record.get(key), value)
+            for key, value in expected.items()
+            if record.get(key) != value
+        }
+        if mismatches:
+            raise ValueError(f"Evaluation contract mismatch in {path}: {mismatches}")
     return records
 
 
@@ -85,8 +92,21 @@ def _prediction_map(records: dict[str, dict[str, Any]]) -> dict[str, str | None]
     return {example_id: record.get("strict_pred") for example_id, record in records.items()}
 
 
-def _mean_generated(records: dict[str, dict[str, Any]]) -> float:
-    return mean(float(record["generated_tokens"]) for record in records.values())
+def _mean_field(records: dict[str, dict[str, Any]], field: str) -> float:
+    return mean(float(record[field]) for record in records.values())
+
+
+def _validate_frozen_arm(
+    records: dict[str, dict[str, Any]],
+    arm: dict[str, Any],
+) -> None:
+    target_name = str(arm["target_name"])
+    if {record.get("target_name") for record in records.values()} != {target_name}:
+        raise ValueError(f"Predictions have the wrong frozen target name for {target_name}")
+    if {record.get("checkpoint_path") for record in records.values()} != {arm.get("sampler_path")}:
+        raise ValueError(f"Predictions do not match the frozen sampler for {target_name}")
+    if {record.get("prompt_variant") for record in records.values()} != {arm.get("prompt_variant")}:
+        raise ValueError(f"Predictions do not match the frozen prompt for {target_name}")
 
 
 def main() -> None:
@@ -103,30 +123,32 @@ def main() -> None:
             f"found {tuple(sorted(adapter_paths))}"
         )
 
-    base_path = Path(args.base_predictions).expanduser().resolve()
-    base = _load_records(
-        base_path,
-        config_hash=cfg.config_hash,
-        partition_hash=partition_hash,
-        effort=cfg.effort,
-        max_tokens=cfg.max_eval_tokens,
+    base_full_path = Path(args.base_full_predictions).expanduser().resolve()
+    base_compact_path = Path(args.base_compact_predictions).expanduser().resolve()
+    common = {
+        "config_hash": cfg.config_hash,
+        "partition_hash": partition_hash,
+        "effort": cfg.effort,
+        "max_tokens": cfg.max_eval_tokens,
+    }
+    base_full = _load_records(base_full_path, **common, prompt_variant=cfg.base_prompt_variant)
+    base_compact = _load_records(
+        base_compact_path, **common, prompt_variant=cfg.adapter_prompt_variant
     )
     adapters = {
-        seed: _load_records(
-            path,
-            config_hash=cfg.config_hash,
-            partition_hash=partition_hash,
-            effort=cfg.effort,
-            max_tokens=cfg.max_eval_tokens,
-        )
+        seed: _load_records(path, **common, prompt_variant=cfg.adapter_prompt_variant)
         for seed, path in adapter_paths.items()
     }
-    for name, records in {"base": base, **{str(k): v for k, v in adapters.items()}}.items():
+    record_groups = {
+        "base-full": base_full,
+        "base-compact": base_compact,
+        **{f"adapter-seed-{seed}": records for seed, records in adapters.items()},
+    }
+    for name, records in record_groups.items():
         if set(records) != expected_ids:
-            raise ValueError(f"{name} predictions do not cover the frozen dev partition")
+            raise ValueError(f"{name} predictions do not cover the frozen partition")
 
     truth = {row.example_id: row.label for row in partition_rows}
-
     test_plan: dict[str, Any] | None = None
     if args.partition == "test":
         if not args.test_plan:
@@ -143,38 +165,50 @@ def main() -> None:
         for key, expected in expected_plan.items():
             if test_plan.get(key) != expected:
                 raise ValueError(f"Frozen test plan {key} mismatch")
-        plan_arms = {str(arm["target_name"]): arm.get("sampler_path") for arm in test_plan["arms"]}
-        expected_arm_names = {"base"} | {f"adapter-seed-{seed}" for seed in cfg.train_seeds}
-        if len(plan_arms) != len(test_plan["arms"]) or set(plan_arms) != expected_arm_names:
+        plan_arms = {str(arm["target_name"]): arm for arm in test_plan["arms"]}
+        if len(plan_arms) != len(test_plan["arms"]) or set(plan_arms) != set(record_groups):
             raise ValueError("Frozen test plan arms do not exactly match the preregistered arms")
-        if {record.get("target_name") for record in base.values()} != {"base"}:
-            raise ValueError("Base test predictions have the wrong frozen target name")
-        if {record.get("checkpoint_path") for record in base.values()} != {plan_arms.get("base")}:
-            raise ValueError("Base test predictions do not match the frozen test arm")
-        for seed, records in adapters.items():
-            target_name = f"adapter-seed-{seed}"
-            if {record.get("target_name") for record in records.values()} != {target_name}:
-                raise ValueError(f"Seed {seed} test predictions have the wrong target name")
-            if {record.get("checkpoint_path") for record in records.values()} != {
-                plan_arms.get(target_name)
-            }:
-                raise ValueError(f"Seed {seed} test predictions do not match the frozen arm")
-    base_metrics = metrics_from_records(bundle.labels, base.values())
+        for target_name, records in record_groups.items():
+            _validate_frozen_arm(records, plan_arms[target_name])
+
+    base_full_metrics = metrics_from_records(bundle.labels, base_full.values())
+    base_compact_metrics = metrics_from_records(bundle.labels, base_compact.values())
     adapter_metrics = {
         seed: metrics_from_records(bundle.labels, records.values())
         for seed, records in adapters.items()
     }
-    bootstrap = paired_seed_bootstrap(
+    adapter_predictions = {seed: _prediction_map(records) for seed, records in adapters.items()}
+    bootstrap_vs_compact = paired_seed_bootstrap(
         bundle.labels,
         truth,
-        _prediction_map(base),
-        {seed: _prediction_map(records) for seed, records in adapters.items()},
+        _prediction_map(base_compact),
+        adapter_predictions,
         args.replicates or cfg.bootstrap_replicates,
         cfg.bootstrap_seed,
     )
-    base_generated = _mean_generated(base)
-    adapter_generated = mean(_mean_generated(records) for records in adapters.values())
-    generated_ratio = adapter_generated / base_generated if base_generated else float("inf")
+    bootstrap_vs_full = paired_seed_bootstrap(
+        bundle.labels,
+        truth,
+        _prediction_map(base_full),
+        adapter_predictions,
+        args.replicates or cfg.bootstrap_replicates,
+        cfg.bootstrap_seed,
+    )
+
+    base_full_prompt_tokens = _mean_field(base_full, "prompt_tokens")
+    adapter_prompt_tokens = mean(
+        _mean_field(records, "prompt_tokens") for records in adapters.values()
+    )
+    prompt_tokens_ratio = (
+        adapter_prompt_tokens / base_full_prompt_tokens if base_full_prompt_tokens else float("inf")
+    )
+    base_full_generated = _mean_field(base_full, "generated_tokens")
+    adapter_generated = mean(
+        _mean_field(records, "generated_tokens") for records in adapters.values()
+    )
+    generated_ratio = (
+        adapter_generated / base_full_generated if base_full_generated else float("inf")
+    )
     adapter_invalid = mean(float(metrics["invalid_rate"]) for metrics in adapter_metrics.values())
 
     latency: dict[str, Any] | None = None
@@ -187,23 +221,26 @@ def main() -> None:
             raise ValueError("Latency gates apply only to dev promotion")
         if latency.get("dev_partition_hash") != partition_hash:
             raise ValueError("Latency summary dev partition hash mismatch")
-        latency_ratio = float(latency["p95_latency_ratio"])
-        latency_pass = latency_ratio <= cfg.max_p95_latency_ratio
+        latency_pass = float(latency["p95_latency_ratio"]) <= cfg.max_p95_latency_ratio
 
     gates: dict[str, bool | None] | None = None
     core_pass: bool | None = None
     promotion_pass: bool | None = None
     if args.partition == "dev":
         gates = {
-            "bootstrap_lower_95_above_minimum": bootstrap["lower_95"]
-            > cfg.min_bootstrap_macro_f1_delta,
-            "invalid_rate_within_limit": adapter_invalid
-            <= float(base_metrics["invalid_rate"]) + cfg.max_invalid_rate_increase,
+            "adapter_improves_over_compact_base": bootstrap_vs_compact["lower_95"]
+            > cfg.min_compact_base_macro_f1_delta,
+            "adapter_retains_full_prompt_quality": bootstrap_vs_full["lower_95"]
+            > cfg.min_full_base_macro_f1_delta,
+            "invalid_rate_within_full_base_limit": adapter_invalid
+            <= float(base_full_metrics["invalid_rate"]) + cfg.max_invalid_rate_increase,
+            "prompt_tokens_within_ratio": prompt_tokens_ratio <= cfg.max_prompt_tokens_ratio,
             "generated_tokens_within_ratio": generated_ratio <= cfg.max_generated_tokens_ratio,
             "latency_within_ratio": latency_pass,
         }
         core_pass = all(value for key, value in gates.items() if key != "latency_within_ratio")
         promotion_pass = core_pass and latency_pass is True
+
     output = {
         "created_at": datetime.now(UTC).isoformat(),
         "experiment_id": cfg.experiment_id,
@@ -212,16 +249,20 @@ def main() -> None:
         "partition_hash": partition_hash,
         "test_plan": str(Path(args.test_plan).expanduser().resolve()) if test_plan else None,
         "test_plan_hash": canonical_hash(test_plan) if test_plan else None,
-        "base_predictions": str(base_path),
+        "base_full_predictions": str(base_full_path),
+        "base_compact_predictions": str(base_compact_path),
         "adapter_predictions": {str(seed): str(path) for seed, path in adapter_paths.items()},
-        "base_metrics": base_metrics,
+        "base_full_metrics": base_full_metrics,
+        "base_compact_metrics": base_compact_metrics,
         "adapter_metrics": {str(seed): value for seed, value in adapter_metrics.items()},
         "mean_adapter_macro_f1": mean(
             float(metrics["macro_f1"]) for metrics in adapter_metrics.values()
         ),
         "mean_adapter_invalid_rate": adapter_invalid,
-        "bootstrap_macro_f1_delta": bootstrap,
-        "mean_generated_tokens_ratio": generated_ratio,
+        "bootstrap_adapter_minus_compact_base": bootstrap_vs_compact,
+        "bootstrap_adapter_minus_full_base": bootstrap_vs_full,
+        "mean_prompt_tokens_ratio_to_full_base": prompt_tokens_ratio,
+        "mean_generated_tokens_ratio_to_full_base": generated_ratio,
         "latency": latency,
         "gates": gates,
         "core_gates_pass": core_pass,
@@ -236,12 +277,24 @@ def main() -> None:
             raise ValueError("A frozen test plan can only be created from dev results")
         if not promotion_pass:
             raise ValueError("Cannot freeze the test plan until every promotion gate passes")
-        if {record.get("checkpoint_path") for record in base.values()} != {None}:
+        base_records = (*base_full.values(), *base_compact.values())
+        if {record.get("checkpoint_path") for record in base_records} != {None}:
             raise ValueError("Base dev predictions unexpectedly reference a checkpoint")
         selection_paths = _seed_paths(args.adapter_selection)
         if set(selection_paths) != set(cfg.train_seeds):
             raise ValueError("Freezing requires one --adapter-selection for every seed")
-        arms: list[dict[str, Any]] = [{"target_name": "base", "sampler_path": None}]
+        arms: list[dict[str, Any]] = [
+            {
+                "target_name": "base-full",
+                "sampler_path": None,
+                "prompt_variant": cfg.base_prompt_variant,
+            },
+            {
+                "target_name": "base-compact",
+                "sampler_path": None,
+                "prompt_variant": cfg.adapter_prompt_variant,
+            },
+        ]
         for seed in cfg.train_seeds:
             selection = json.loads(selection_paths[seed].read_text())
             sampler_path = str(selection["sampler_path"])
@@ -254,12 +307,19 @@ def main() -> None:
                 {
                     "target_name": f"adapter-seed-{seed}",
                     "sampler_path": sampler_path,
+                    "prompt_variant": cfg.adapter_prompt_variant,
                     "seed": seed,
                     "selection_path": str(selection_paths[seed]),
                     "selection_hash": canonical_hash(selection),
                 }
             )
-        expected_latency_arms = {arm["target_name"]: arm["sampler_path"] for arm in arms}
+        expected_latency_arms = {
+            arm["target_name"]: {
+                "sampler_path": arm["sampler_path"],
+                "prompt_variant": arm["prompt_variant"],
+            }
+            for arm in arms
+        }
         if latency is None or latency.get("arms") != expected_latency_arms:
             raise ValueError("Latency benchmark arms do not match the frozen test arms")
         test_plan = {

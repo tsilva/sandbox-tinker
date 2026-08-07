@@ -15,7 +15,7 @@ from banking77_experiment.training import PlannedBatch, RenderedDatum, plan_batc
 
 
 def _rendered(index: int) -> RenderedDatum:
-    example = Example(str(index), "train", index, str(index), 0, "label", "prompt")
+    example = Example(str(index), "train", index, str(index), 0, "label")
     return RenderedDatum(example, None, index + 1)  # type: ignore[arg-type]
 
 

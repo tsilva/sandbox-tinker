@@ -52,7 +52,13 @@ def test_test_plan_and_receipt_are_immutable(tmp_path):
         "test_partition_hash": "test",
         "effort": 0.0,
         "max_tokens": 32,
-        "arms": [{"target_name": "base", "sampler_path": None}],
+        "arms": [
+            {
+                "target_name": "base-full",
+                "sampler_path": None,
+                "prompt_variant": "full_taxonomy",
+            }
+        ],
     }
     plan_path = tmp_path / "test-plan.json"
     plan_path.write_text(json.dumps(plan))
@@ -62,10 +68,11 @@ def test_test_plan_and_receipt_are_immutable(tmp_path):
         config_hash="cfg",
         dataset_revision="rev",
         test_partition_hash="test",
-        target_name="base",
+        target_name="base-full",
         sampler_path=None,
         effort=0.0,
         max_tokens=32,
+        prompt_variant="full_taxonomy",
     )
     assert loaded == plan
     assert digest == canonical_hash(plan)

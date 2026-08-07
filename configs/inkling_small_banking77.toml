@@ -1,30 +1,44 @@
 [experiment]
-id = "inkling-small-banking77-v1"
+id = "inkling-small-banking77-schema-distillation-v2"
 
 [model]
 name = "thinkingmachines/Inkling-Small"
 effort = 0.0
 
 [data]
-name = "tsilva/banking77"
-revision = "4235e96197daaaf23a9e278d3cbce078de7fee36"
+name = "PolyAI-LDN/task-specific-datasets"
+revision = "57ec275d8078af65b7731c2a98be812d844a6d6b"
+train_url = "https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/57ec275d8078af65b7731c2a98be812d844a6d6b/banking_data/train.csv"
+test_url = "https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/57ec275d8078af65b7731c2a98be812d844a6d6b/banking_data/test.csv"
+train_sha256 = "b06e26ac675513959a63135f11b94ea7786ed02da65db93a5650d8838cbc664b"
+test_sha256 = "d12d6e3bc4c3103966ae786dc435913c0c563dfa328f5a3646d0e62cfeeb474d"
+labels_path = "banking77_categories.json"
+labels_sha256 = "e58114f0c41107b65df9821b4c928e9630278216ecb12f48ba2b6301c3f6d251"
+label_column = "category"
 train_split = "train"
 test_split = "test"
-expected_train_rows = 9993
-expected_test_rows = 3076
+expected_train_rows = 10003
+expected_test_rows = 3080
 expected_labels = 77
 expected_quarantined_test_leaks = 7
+expected_deduplicated_train_rows = 4
 dev_per_label = 10
 split_seed = 13
 pilot_per_label = 8
 scale_per_label = 24
+
+[prompts]
+compact_system_prompt = "Classify with the exact Banking77 intent label. Output only the label."
+training_variant = "compact"
+base_variant = "full_taxonomy"
+adapter_variant = "compact"
 
 [training]
 lora_rank = 32
 batch_size = 16
 epochs = 3
 max_length = 2048
-learning_rates = [5e-5, 2e-4, 8e-4]
+learning_rates = [2e-4]
 lr_schedule = "linear"
 warmup_ratio = 0.03
 seeds = [13, 17, 29]
@@ -35,8 +49,10 @@ max_tokens = 32
 retry_attempts = 3
 bootstrap_replicates = 10000
 bootstrap_seed = 20260807
-min_bootstrap_macro_f1_delta = 0.0
+min_compact_base_macro_f1_delta = 0.0
+min_full_base_macro_f1_delta = -0.02
 max_invalid_rate_increase = 0.01
+max_prompt_tokens_ratio = 0.10
 max_generated_tokens_ratio = 1.25
 max_p95_latency_ratio = 1.25
 latency_examples_per_label = 2

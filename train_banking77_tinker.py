@@ -105,6 +105,9 @@ async def run(args: argparse.Namespace) -> None:
         train_rows,
         renderer,
         tokenizer,
+        bundle.labels,
+        cfg.training_prompt_variant,
+        cfg.compact_system_prompt,
         cfg.effort,
         cfg.max_length,
     )
@@ -124,7 +127,17 @@ async def run(args: argparse.Namespace) -> None:
         if index == len(planned) - 1 or planned[index + 1].epoch != batch.epoch
     )
     dev_prompt_tokens = sum(
-        len(generation_prompt(renderer, row, cfg.effort).to_ints()) for row in dev_rows
+        len(
+            generation_prompt(
+                renderer,
+                row,
+                bundle.labels,
+                cfg.adapter_prompt_variant,
+                cfg.compact_system_prompt,
+                cfg.effort,
+            ).to_ints()
+        )
+        for row in dev_rows
     )
     tokens = TokenEstimate(
         train_tokens=sum(batch.tokens for batch in planned),
@@ -151,6 +164,8 @@ async def run(args: argparse.Namespace) -> None:
         "git": git_metadata(Path(__file__).resolve().parent),
         "partition_manifest": bundle.manifest,
         "data_size": args.data_size,
+        "training_prompt_variant": cfg.training_prompt_variant,
+        "evaluation_prompt_variant": cfg.adapter_prompt_variant,
         "learning_rate": learning_rate,
         "seed": args.seed,
         "max_steps": args.max_steps,
@@ -200,14 +215,6 @@ async def run(args: argparse.Namespace) -> None:
             "data_size": args.data_size,
         },
     )
-    # Use the service tokenizer for API-facing rendering and verify local identity.
-    service_tokenizer = training_client.get_tokenizer()
-    if service_tokenizer.encode("Inkling renderer check") != tokenizer.encode(
-        "Inkling renderer check"
-    ):
-        raise ValueError("Local and service tokenizers differ")
-    renderer = make_renderer(cfg.model_name, service_tokenizer, cfg.renderer_name)
-
     checkpoint_candidates: list[dict[str, object]] = []
     cumulative_tokens = 0
     for step, batch in enumerate(planned, start=1):
@@ -249,7 +256,7 @@ async def run(args: argparse.Namespace) -> None:
         summary = await evaluate_rows(
             sampling_client,
             renderer,
-            service_tokenizer,
+            tokenizer,
             tuple(dev_rows),
             bundle.labels,
             EvaluationSpec(
@@ -262,6 +269,8 @@ async def run(args: argparse.Namespace) -> None:
                 retry_attempts=cfg.retry_attempts,
                 config_hash=cfg.config_hash,
                 partition_hash=bundle.manifest["hashes"]["dev"],
+                compact_system_prompt=cfg.compact_system_prompt,
+                prompt_variant=cfg.adapter_prompt_variant,
             ),
             run_dir / f"predictions_{step:06d}.jsonl",
             price=price.model,

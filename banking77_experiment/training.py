@@ -34,11 +34,27 @@ class PlannedBatch:
 
 
 def render_training_rows(
-    rows: Iterable[Example], renderer: Any, tokenizer: Any, effort: float, max_length: int
+    rows: Iterable[Example],
+    renderer: Any,
+    tokenizer: Any,
+    labels: tuple[str, ...],
+    prompt_variant: str,
+    compact_system_prompt: str,
+    effort: float,
+    max_length: int,
 ) -> tuple[RenderedDatum, ...]:
     rendered: list[RenderedDatum] = []
     for example in rows:
-        datum, tokens = training_datum(renderer, tokenizer, example, effort, max_length)
+        datum, tokens = training_datum(
+            renderer,
+            tokenizer,
+            example,
+            labels,
+            prompt_variant,
+            compact_system_prompt,
+            effort,
+            max_length,
+        )
         rendered.append(RenderedDatum(example=example, datum=datum, tokens=tokens))
     return tuple(rendered)
 

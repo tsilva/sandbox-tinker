@@ -49,6 +49,12 @@ def parse_args() -> argparse.Namespace:
     target.add_argument("--sampler-path", default=None)
     target.add_argument("--selection", default=None, help="Path to selection.json")
     parser.add_argument("--target-name", default=None)
+    parser.add_argument(
+        "--prompt-variant",
+        choices=("full_taxonomy", "compact"),
+        default=None,
+        help="Defaults to full_taxonomy for base and compact for adapters.",
+    )
     parser.add_argument("--effort", type=float, default=None)
     parser.add_argument("--max-tokens", type=int, default=None)
     parser.add_argument("--examples-per-label", type=int, default=None)
@@ -79,7 +85,15 @@ async def run(args: argparse.Namespace) -> None:
     if args.selection:
         selection = json.loads(Path(args.selection).expanduser().read_text())
         sampler_path = str(selection["sampler_path"])
-    target_name = args.target_name or ("base" if sampler_path is None else "adapter")
+    prompt_variant = args.prompt_variant or (
+        cfg.base_prompt_variant if sampler_path is None else cfg.adapter_prompt_variant
+    )
+    if args.target_name:
+        target_name = args.target_name
+    elif sampler_path is None:
+        target_name = "base-full" if prompt_variant == cfg.base_prompt_variant else "base-compact"
+    else:
+        target_name = "adapter"
 
     bundle = build_partitions(cfg)
     if args.partition == "test":
@@ -99,7 +113,19 @@ async def run(args: argparse.Namespace) -> None:
 
     tokenizer = get_tokenizer(cfg.model_name)
     renderer = make_renderer(cfg.model_name, tokenizer, cfg.renderer_name)
-    prompt_tokens = sum(len(generation_prompt(renderer, row, effort).to_ints()) for row in rows)
+    prompt_tokens = sum(
+        len(
+            generation_prompt(
+                renderer,
+                row,
+                bundle.labels,
+                prompt_variant,
+                cfg.compact_system_prompt,
+                effort,
+            ).to_ints()
+        )
+        for row in rows
+    )
     tokens = TokenEstimate(
         prefill_tokens=prompt_tokens,
         sample_tokens=len(rows) * max_tokens,
@@ -119,6 +145,7 @@ async def run(args: argparse.Namespace) -> None:
             sampler_path=sampler_path,
             effort=effort,
             max_tokens=max_tokens,
+            prompt_variant=prompt_variant,
         )
     if args.output_dir:
         output_dir = Path(args.output_dir).expanduser().resolve()
@@ -146,6 +173,7 @@ async def run(args: argparse.Namespace) -> None:
         "rows": len(rows),
         "effort": effort,
         "max_tokens": max_tokens,
+        "prompt_variant": prompt_variant,
         "config_hash": cfg.config_hash,
         "git": git_metadata(Path(__file__).resolve().parent),
         "token_estimate": {
@@ -175,6 +203,7 @@ async def run(args: argparse.Namespace) -> None:
                     "rows",
                     "effort",
                     "max_tokens",
+                    "prompt_variant",
                     "config_hash",
                     "token_estimate",
                     "test_plan_hash",
@@ -187,12 +216,6 @@ async def run(args: argparse.Namespace) -> None:
         raise RuntimeError("Set TINKER_API_KEY before paid evaluation")
     service = tinker.ServiceClient(base_url=args.base_url)
     sampling_client = await create_sampling_client(service, cfg.model_name, sampler_path)
-    service_tokenizer = sampling_client.get_tokenizer()
-    if service_tokenizer.encode("Inkling renderer check") != tokenizer.encode(
-        "Inkling renderer check"
-    ):
-        raise ValueError("Local and service tokenizers differ")
-    renderer = make_renderer(cfg.model_name, service_tokenizer, cfg.renderer_name)
     if args.partition == "test":
         receipt = {
             "experiment_id": experiment_id,
@@ -209,7 +232,7 @@ async def run(args: argparse.Namespace) -> None:
     summary = await evaluate_rows(
         sampling_client,
         renderer,
-        service_tokenizer,
+        tokenizer,
         tuple(rows),
         bundle.labels,
         EvaluationSpec(
@@ -222,6 +245,8 @@ async def run(args: argparse.Namespace) -> None:
             retry_attempts=cfg.retry_attempts,
             config_hash=cfg.config_hash,
             partition_hash=partition_hash,
+            compact_system_prompt=cfg.compact_system_prompt,
+            prompt_variant=prompt_variant,
         ),
         output_dir / "predictions.jsonl",
         price=price.model,

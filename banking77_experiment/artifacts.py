@@ -96,6 +96,7 @@ def load_and_validate_test_plan(
     sampler_path: str | None,
     effort: float,
     max_tokens: int,
+    prompt_variant: str,
 ) -> tuple[dict[str, Any], str]:
     plan = json.loads(path.read_text())
     expected = {
@@ -117,11 +118,14 @@ def load_and_validate_test_plan(
     matching = [
         arm
         for arm in arms
-        if arm.get("target_name") == target_name and arm.get("sampler_path") == sampler_path
+        if arm.get("target_name") == target_name
+        and arm.get("sampler_path") == sampler_path
+        and arm.get("prompt_variant") == prompt_variant
     ]
     if len(matching) != 1:
         raise ValueError(
-            f"Target {target_name!r} with sampler {sampler_path!r} is not a unique frozen arm"
+            f"Target {target_name!r} with sampler {sampler_path!r} and prompt "
+            f"{prompt_variant!r} is not a unique frozen arm"
         )
     return plan, canonical_hash(plan)
 

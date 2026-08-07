@@ -8,13 +8,14 @@ import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 import datasets
 
 from .config import ExperimentConfig
 
-REQUIRED_COLUMNS = {"text", "label", "label_text", "system_prompt"}
+TEXT_COLUMN = "text"
 
 
 @dataclass(frozen=True)
@@ -25,7 +26,6 @@ class Example:
     text: str
     label_id: int
     label: str
-    system_prompt: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -45,14 +45,9 @@ def normalized_text(value: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
-def _content_digest(row: dict[str, Any]) -> str:
+def _content_digest(text: str, label: str) -> str:
     payload = json.dumps(
-        {
-            "text": str(row["text"]),
-            "label": int(row["label"]),
-            "label_text": str(row["label_text"]),
-            "system_prompt": str(row["system_prompt"]),
-        },
+        {"text": text, "label": label},
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
@@ -65,42 +60,80 @@ def _example_id(revision: str, split: str, index: int, digest: str) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _to_examples(ds: datasets.Dataset, split: str, revision: str) -> tuple[Example, ...]:
-    missing = REQUIRED_COLUMNS - set(ds.column_names)
+def _to_examples(
+    ds: datasets.Dataset,
+    split: str,
+    revision: str,
+    label_column: str,
+    label_to_id: dict[str, int],
+) -> tuple[Example, ...]:
+    missing = {TEXT_COLUMN, label_column} - set(ds.column_names)
     if missing:
         raise ValueError(f"{split!r} is missing required columns: {sorted(missing)}")
 
     examples: list[Example] = []
     for index, row in enumerate(ds):
-        digest = _content_digest(row)
+        text = str(row[TEXT_COLUMN])
+        label = str(row[label_column])
+        if label not in label_to_id:
+            raise ValueError(f"{split}[{index}] has unknown label {label!r}")
+        digest = _content_digest(text, label)
         examples.append(
             Example(
                 example_id=_example_id(revision, split, index, digest),
                 source_split=split,
                 source_index=index,
-                text=str(row["text"]),
-                label_id=int(row["label"]),
-                label=str(row["label_text"]),
-                system_prompt=str(row["system_prompt"]),
+                text=text,
+                label_id=label_to_id[label],
+                label=label,
             )
         )
     return tuple(examples)
 
 
-def _derive_labels(examples: Iterable[Example], expected_labels: int) -> tuple[str, ...]:
-    label_by_id: dict[int, str] = {}
-    for example in examples:
-        previous = label_by_id.setdefault(example.label_id, example.label)
-        if previous != example.label:
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _load_labels(cfg: ExperimentConfig) -> tuple[str, ...]:
+    observed_sha256 = _sha256_file(cfg.labels_path)
+    if observed_sha256 != cfg.labels_sha256:
+        raise ValueError(
+            f"Label asset checksum mismatch: expected {cfg.labels_sha256}, found {observed_sha256}"
+        )
+    raw = json.loads(cfg.labels_path.read_text())
+    if not isinstance(raw, list) or not all(isinstance(value, str) for value in raw):
+        raise ValueError("The label asset must be a JSON list of strings")
+    labels = tuple(raw)
+    if len(labels) != cfg.expected_labels or len(set(labels)) != len(labels):
+        raise ValueError(
+            f"Expected {cfg.expected_labels} unique labels, found {len(labels)} rows "
+            f"and {len(set(labels))} unique values"
+        )
+    return labels
+
+
+def _download_pinned_csvs(cfg: ExperimentConfig) -> dict[str, Path]:
+    manager = datasets.DownloadManager(dataset_name=cfg.dataset_name, record_checksums=True)
+    downloaded = manager.download(
+        {cfg.train_split: cfg.train_data_url, cfg.test_split: cfg.test_data_url}
+    )
+    paths = {split: Path(value) for split, value in downloaded.items()}
+    expected = {
+        cfg.train_split: cfg.train_data_sha256,
+        cfg.test_split: cfg.test_data_sha256,
+    }
+    for split, expected_sha256 in expected.items():
+        observed_sha256 = _sha256_file(paths[split])
+        if observed_sha256 != expected_sha256:
             raise ValueError(
-                f"Label id {example.label_id} maps to both {previous!r} and {example.label!r}"
+                f"{split} checksum mismatch: expected {expected_sha256}, found {observed_sha256}"
             )
-    if len(label_by_id) != expected_labels:
-        raise ValueError(f"Expected {expected_labels} labels, found {len(label_by_id)}")
-    expected_ids = list(range(expected_labels))
-    if sorted(label_by_id) != expected_ids:
-        raise ValueError(f"Label ids must be contiguous 0..{expected_labels - 1}")
-    return tuple(label_by_id[index] for index in expected_ids)
+    return paths
 
 
 def _stable_rng(seed: int, label: str) -> random.Random:
@@ -179,17 +212,32 @@ def _quarantine_test_leaks(
     return tuple(clean), tuple(quarantined)
 
 
+def _deduplicate_training_rows(
+    examples: tuple[Example, ...],
+) -> tuple[tuple[Example, ...], tuple[Example, ...]]:
+    seen: set[tuple[str, str]] = set()
+    unique: list[Example] = []
+    duplicates: list[Example] = []
+    for example in examples:
+        key = (normalized_text(example.text), example.label)
+        if key in seen:
+            duplicates.append(example)
+        else:
+            seen.add(key)
+            unique.append(example)
+    return tuple(unique), tuple(duplicates)
+
+
 def build_partitions(cfg: ExperimentConfig) -> PartitionBundle:
-    train_ds = datasets.load_dataset(
-        cfg.dataset_name,
-        split=cfg.train_split,
-        revision=cfg.dataset_revision,
+    labels = _load_labels(cfg)
+    label_to_id = {label: index for index, label in enumerate(labels)}
+    data_paths = _download_pinned_csvs(cfg)
+    loaded = datasets.load_dataset(
+        "csv",
+        data_files={split: str(path) for split, path in data_paths.items()},
     )
-    test_ds = datasets.load_dataset(
-        cfg.dataset_name,
-        split=cfg.test_split,
-        revision=cfg.dataset_revision,
-    )
+    train_ds = loaded[cfg.train_split]
+    test_ds = loaded[cfg.test_split]
     if not isinstance(train_ds, datasets.Dataset) or not isinstance(test_ds, datasets.Dataset):
         raise TypeError("Expected non-streaming Hugging Face Dataset splits")
     if len(train_ds) != cfg.expected_train_rows:
@@ -197,12 +245,17 @@ def build_partitions(cfg: ExperimentConfig) -> PartitionBundle:
     if len(test_ds) != cfg.expected_test_rows:
         raise ValueError(f"Expected {cfg.expected_test_rows} test rows, found {len(test_ds)}")
 
-    source_train = _to_examples(train_ds, cfg.train_split, cfg.dataset_revision)
-    test = _to_examples(test_ds, cfg.test_split, cfg.dataset_revision)
-    labels = _derive_labels(source_train, cfg.expected_labels)
-    test_labels = _derive_labels(test, cfg.expected_labels)
-    if labels != test_labels:
-        raise ValueError("Train and test label mappings differ")
+    source_train = _to_examples(
+        train_ds, cfg.train_split, cfg.dataset_revision, cfg.label_column, label_to_id
+    )
+    test = _to_examples(
+        test_ds, cfg.test_split, cfg.dataset_revision, cfg.label_column, label_to_id
+    )
+    for split, examples in ((cfg.train_split, source_train), (cfg.test_split, test)):
+        observed_labels = {example.label for example in examples}
+        if observed_labels != set(labels):
+            missing = sorted(set(labels) - observed_labels)
+            raise ValueError(f"{split} does not cover the frozen taxonomy; missing={missing}")
 
     clean_source_train, quarantined_test_leaks = _quarantine_test_leaks(source_train, test)
     if len(quarantined_test_leaks) != cfg.expected_quarantined_test_leaks:
@@ -211,8 +264,14 @@ def build_partitions(cfg: ExperimentConfig) -> PartitionBundle:
             f"{cfg.expected_quarantined_test_leaks} quarantined train/test duplicates, "
             f"found {len(quarantined_test_leaks)}"
         )
+    unique_source_train, deduplicated_train_rows = _deduplicate_training_rows(clean_source_train)
+    if len(deduplicated_train_rows) != cfg.expected_deduplicated_train_rows:
+        raise ValueError(
+            f"Expected {cfg.expected_deduplicated_train_rows} duplicate training rows, "
+            f"found {len(deduplicated_train_rows)}"
+        )
     train_pool, dev = _partition_train(
-        clean_source_train,
+        unique_source_train,
         labels,
         cfg.dev_per_label,
         cfg.split_seed,
@@ -223,11 +282,23 @@ def build_partitions(cfg: ExperimentConfig) -> PartitionBundle:
     manifest = {
         "dataset_name": cfg.dataset_name,
         "dataset_revision": cfg.dataset_revision,
+        "source_urls": {
+            cfg.train_split: cfg.train_data_url,
+            cfg.test_split: cfg.test_data_url,
+        },
+        "source_sha256": {
+            cfg.train_split: cfg.train_data_sha256,
+            cfg.test_split: cfg.test_data_sha256,
+            "labels": cfg.labels_sha256,
+        },
+        "label_column": cfg.label_column,
         "split_seed": cfg.split_seed,
         "dev_per_label": cfg.dev_per_label,
         "labels": list(labels),
         "quarantined_test_leaks": [example.to_dict() for example in quarantined_test_leaks],
         "quarantined_test_leak_count": len(quarantined_test_leaks),
+        "deduplicated_train_rows": [example.to_dict() for example in deduplicated_train_rows],
+        "deduplicated_train_row_count": len(deduplicated_train_rows),
         "counts": {name: len(rows) for name, rows in partitions.items()},
         "class_counts": {
             name: dict(sorted(Counter(row.label for row in rows).items()))

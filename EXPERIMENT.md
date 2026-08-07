@@ -1,214 +1,182 @@
-# Preregistered experiment protocol
+# Preregistered schema-distillation experiment
 
-## Question and estimand
+## Question
 
-Does supervised LoRA fine-tuning improve strict intent classification by Inkling-Small on
-Banking77 when inference is constrained to `effort=0.0`?
+Can supervised LoRA training teach Inkling-Small the Banking77 intent taxonomy well enough to
+replace a prompt containing all 77 labels with a short instruction?
 
-The primary estimand is the mean adapter-seed minus base-model difference in strict macro-F1 on
-the frozen official test examples. The uncertainty interval resamples examples within each label
-and adapter seeds, preserving the paired base/adapter comparison.
+All arms use `thinkingmachines/Inkling-Small`, the cookbook `tml_v0` renderer, effort `0.0`,
+temperature `0`, a 32-token output limit, and strict exact-label scoring.
 
-Primary model and rendering settings:
+The three comparisons are:
 
-- Base model: `thinkingmachines/Inkling-Small`
-- Renderer: the cookbook-recommended `tml_v0`, asserted at runtime
-- Training and primary inference effort: `0.0`
-- Decoding: temperature 0, maximum 32 tokens, renderer stop sequences
-- Output contract: one exact label; normalization is diagnostic only
+1. `base-full`: unchanged model plus the full ordered label taxonomy;
+2. `base-compact`: unchanged model plus the compact instruction, with no candidate labels;
+3. `adapter-seed-*`: trained model plus that exact same compact instruction.
+
+The compact prompt is:
+
+> Classify with the exact Banking77 intent label. Output only the label.
+
+The base model is not expected to infer arbitrary label spellings reliably. That is the point of
+the compact base control: it separates knowledge transferred by training from help supplied by the
+full prompt.
 
 ## Frozen data
 
-- Dataset: `tsilva/banking77`
-- Revision: `4235e96197daaaf23a9e278d3cbce078de7fee36`
-- Source counts: 9,993 train; 3,076 official test; 77 labels
-- Training-side train/test duplicate quarantine: exactly 7 rows
-- Dev: 10 examples per label selected deterministically from clean source train with seed 13
-- Train pool: all remaining clean source-train examples
-- Pilot: first 8 train-pool examples per label
-- Scale: first 24 train-pool examples per label
+- Source: `PolyAI-LDN/task-specific-datasets`
+- Commit: `57ec275d8078af65b7731c2a98be812d844a6d6b`
+- Source counts: 10,003 train; 3,080 official test; 77 labels
+- Cross-split quarantine: exactly 7 training rows
+- Within-training deduplication: exactly 4 repeated rows
+- Dev: 10 unique examples per label selected deterministically with seed 13
+- Train pool: all remaining 9,222 unique training examples
+- Pilot: first 8 train-pool examples per label, 616 total
+- Scale: first 24 train-pool examples per label, 1,848 total
 
-The partition manifest contains stable content-derived example IDs, per-class counts, duplicate
-reports, partition hashes, and a full quarantine record. Any upstream drift is fatal.
+The source URLs and CSV SHA-256 digests are frozen in the config. The vendored label asset is also
+checksum-verified. Any count, label, checksum, duplicate, or partition drift aborts the run.
 
-## Training and selection
+## Training and staging
 
-Fixed settings are LoRA rank 32, batch size 16, three epochs, maximum length 2,048, linear decay,
-3% warmup, and Adam `(beta1=0.9, beta2=0.95, eps=1e-8)`.
+Training always uses the compact prompt. Fixed settings are LoRA rank 32, batch size 16, three
+epochs, maximum length 2,048, linear decay, 3% warmup, Adam
+`(beta1=0.9, beta2=0.95, eps=1e-8)`, and learning rate `2e-4`.
 
-Candidate learning rates are `5e-5`, `2e-4`, and `8e-4`. Pilot all three on seed 13. For each run,
-select the epoch checkpoint by:
-
-1. highest strict dev macro-F1;
-2. lowest strict invalid-output rate;
-3. fewest cumulative training tokens;
-4. earliest optimizer step.
-
-Select the pilot learning rate with the same ordered rule, then run scale training at seeds 13,
-17, and 29. No official-test result may influence any selection.
-
-Example pilot commands (each checked ceiling is $2.7748; use a $2.90 guard):
+Start with one seed-13 pilot. Do not launch the three scale seeds unless its dev comparison is
+promising. Dry-run first:
 
 ```bash
-uv run python train_banking77_tinker.py --data-size pilot --learning-rate 5e-5 \
-  --seed 13 --run-dir runs/pilot/lr-5e-5 --budget-usd 2.90
-uv run python train_banking77_tinker.py --data-size pilot --learning-rate 2e-4 \
-  --seed 13 --run-dir runs/pilot/lr-2e-4 --budget-usd 2.90
-uv run python train_banking77_tinker.py --data-size pilot --learning-rate 8e-4 \
-  --seed 13 --run-dir runs/pilot/lr-8e-4 --budget-usd 2.90
-
-uv run python select_banking77_candidate.py \
-  --candidate runs/pilot/lr-5e-5/selection.json \
-  --candidate runs/pilot/lr-2e-4/selection.json \
-  --candidate runs/pilot/lr-8e-4/selection.json \
-  --output runs/pilot/best.json
+uv run python train_banking77_tinker.py --dry-run --data-size pilot \
+  --learning-rate 2e-4 --seed 13 --run-dir runs/v2/pilot/seed-13
 ```
 
-Replace `<BEST_LR>` below with `learning_rate` from `runs/pilot/best.json`. Dry-run each command,
-then run with a current ceiling (the checked scale estimate is $6.5489; $6.75 leaves little price
-drift and intentionally fails closed if pricing moves farther):
+The checked estimate is $0.3248. A paid rerun requires a newly approved ceiling:
 
 ```bash
-uv run python train_banking77_tinker.py --dry-run --data-size scale \
-  --learning-rate <BEST_LR> --seed 13 --run-dir runs/dry-scale-13
-
-uv run python train_banking77_tinker.py --data-size scale --learning-rate <BEST_LR> \
-  --seed 13 --run-dir runs/scale/seed-13 --budget-usd 6.75
-uv run python train_banking77_tinker.py --data-size scale --learning-rate <BEST_LR> \
-  --seed 17 --run-dir runs/scale/seed-17 --budget-usd 6.75
-uv run python train_banking77_tinker.py --data-size scale --learning-rate <BEST_LR> \
-  --seed 29 --run-dir runs/scale/seed-29 --budget-usd 6.75
+uv run python train_banking77_tinker.py --data-size pilot \
+  --learning-rate 2e-4 --seed 13 --run-dir runs/v2/pilot/seed-13 \
+  --budget-usd <APPROVED_CEILING>
 ```
 
-## Dev evaluation and effort profile
+Each epoch checkpoint is selected by highest strict dev macro-F1, then lowest invalid rate, fewest
+training tokens, and earliest step. If the pilot passes the decision check, dry-run and then train
+the scale subset for seeds 13, 17, and 29 in separate immutable directories. The checked scale
+estimate is $0.6465 per seed.
 
-Characterize the unchanged base model at efforts 0.0, 0.5, and 0.9, without selecting the primary
-effort from results:
+## Dev evaluation
+
+Dry-run the two unchanged-model controls:
 
 ```bash
-uv run python evaluate_banking77_checkpoint.py --partition dev --effort 0.0 \
-  --target-name base-effort-0 --output-dir runs/dev/base-effort-0 --budget-usd 0.35
-uv run python evaluate_banking77_checkpoint.py --partition dev --effort 0.5 \
-  --target-name base-effort-0.5 --output-dir runs/dev/base-effort-0.5 --budget-usd 0.35
-uv run python evaluate_banking77_checkpoint.py --partition dev --effort 0.9 \
-  --target-name base-effort-0.9 --output-dir runs/dev/base-effort-0.9 --budget-usd 0.35
+uv run python evaluate_banking77_checkpoint.py --dry-run --partition dev \
+  --prompt-variant full_taxonomy --target-name base-full \
+  --output-dir runs/v2/dev/base-full
+
+uv run python evaluate_banking77_checkpoint.py --dry-run --partition dev \
+  --prompt-variant compact --target-name base-compact \
+  --output-dir runs/v2/dev/base-compact
 ```
 
-Create standardized full-dev records for each selected adapter (one example shown):
+Checked estimates are $0.2333 for `base-full` and $0.0547 for `base-compact`. After approval,
+repeat without `--dry-run` and add an explicit `--budget-usd` ceiling.
+
+Evaluate each selected adapter using the same compact prompt:
 
 ```bash
-uv run python evaluate_banking77_checkpoint.py --partition dev \
-  --selection runs/scale/seed-13/selection.json --target-name adapter-seed-13 \
-  --output-dir runs/dev/adapter-seed-13 --budget-usd 0.35
+uv run python evaluate_banking77_checkpoint.py --dry-run --partition dev \
+  --selection runs/v2/scale/seed-13/selection.json \
+  --prompt-variant compact --target-name adapter-seed-13 \
+  --output-dir runs/v2/dev/adapter-seed-13
 ```
 
-Repeat for seeds 17 and 29. JSONL writes are append-only and resumable. An evaluation is invalid
-unless every planned example has exactly one successful record; failed attempts are stored in a
-separate errors file, and only retryable transport, 429, and 5xx errors are retried.
+Repeat for seeds 17 and 29. Evaluation JSONL is append-only and resumable under a contract that
+includes the config, partition, checkpoint, decoding settings, and prompt variant.
 
-## Metrics and promotion gates
+## Metrics and gates
 
-Primary metrics use exact, whitespace-trimmed labels:
+Primary metrics are strict macro-F1, accuracy, invalid-output rate, per-class statistics, and
+confusions. Tolerant parsing is diagnostic only.
 
-- strict macro-F1 (primary);
-- accuracy;
-- invalid-output rate;
-- per-class precision, recall, F1, and support;
-- confusion counts.
+Two paired, label-stratified, seed-aware bootstraps use 10,000 replicates and seed 20260807:
 
-Case/punctuation/format normalization is reported only as a tolerant diagnostic and never replaces
-the primary prediction. The hierarchical paired bootstrap uses 10,000 replicates and seed
-20260807.
+- Training benefit: mean adapter minus `base-compact`; lower 95% bound must exceed `0.00`.
+- Prompt compression: mean adapter minus `base-full`; lower 95% bound must exceed `-0.02`.
 
-Promotion to the sealed test split requires all of:
+Promotion also requires:
 
-1. the 95% bootstrap lower bound for mean adapter macro-F1 minus base macro-F1 is greater than 0;
-2. mean adapter invalid rate is no more than one percentage point above base;
-3. mean generated tokens per adapter are no more than 1.25× base;
-4. worst adapter p95 latency is no more than 1.25× base in the separate sequential benchmark.
+- mean adapter prompt tokens no more than 10% of `base-full`;
+- mean adapter invalid rate no more than one percentage point above `base-full`;
+- mean adapter generated tokens no more than 1.25× `base-full`;
+- worst adapter p95 latency no more than 1.25× `base-full`.
 
 The latency benchmark uses two fixed dev examples per label, ten warmups per arm, sequential calls,
-and a rotating interleaved arm order. It includes one base arm and all three selected adapters:
+and rotating arm order. It includes `base-full`, `base-compact`, and all three adapters:
 
 ```bash
 uv run python benchmark_banking77_latency.py --dry-run \
-  --selection 13=runs/scale/seed-13/selection.json \
-  --selection 17=runs/scale/seed-17/selection.json \
-  --selection 29=runs/scale/seed-29/selection.json \
-  --output-dir runs/latency
+  --selection 13=runs/v2/scale/seed-13/selection.json \
+  --selection 17=runs/v2/scale/seed-17/selection.json \
+  --selection 29=runs/v2/scale/seed-29/selection.json \
+  --output-dir runs/v2/latency
 ```
 
-Inspect its estimate, then repeat without `--dry-run` and with a separately approved
-`--budget-usd` ceiling.
+The checked five-arm estimate is $0.0960. Run it only after separate approval.
 
-Compare dev results and freeze the exact test arms only after latency passes:
+Compare dev results and freeze the exact test plan only after all gates pass:
 
 ```bash
 uv run python compare_banking77_runs.py \
-  --base-predictions runs/dev/base-effort-0/predictions.jsonl \
-  --adapter-predictions 13=runs/dev/adapter-seed-13/predictions.jsonl \
-  --adapter-predictions 17=runs/dev/adapter-seed-17/predictions.jsonl \
-  --adapter-predictions 29=runs/dev/adapter-seed-29/predictions.jsonl \
-  --adapter-selection 13=runs/scale/seed-13/selection.json \
-  --adapter-selection 17=runs/scale/seed-17/selection.json \
-  --adapter-selection 29=runs/scale/seed-29/selection.json \
-  --latency-summary runs/latency/summary.json \
-  --output runs/dev/comparison.json \
-  --freeze-test-plan runs/test-plan.json
+  --base-full-predictions runs/v2/dev/base-full/predictions.jsonl \
+  --base-compact-predictions runs/v2/dev/base-compact/predictions.jsonl \
+  --adapter-predictions 13=runs/v2/dev/adapter-seed-13/predictions.jsonl \
+  --adapter-predictions 17=runs/v2/dev/adapter-seed-17/predictions.jsonl \
+  --adapter-predictions 29=runs/v2/dev/adapter-seed-29/predictions.jsonl \
+  --adapter-selection 13=runs/v2/scale/seed-13/selection.json \
+  --adapter-selection 17=runs/v2/scale/seed-17/selection.json \
+  --adapter-selection 29=runs/v2/scale/seed-29/selection.json \
+  --latency-summary runs/v2/latency/summary.json \
+  --output runs/v2/dev/comparison.json \
+  --freeze-test-plan runs/v2/test-plan.json
 ```
 
-## Sealed test execution
+## Sealed test
 
-`evaluate_banking77_checkpoint.py` refuses test access without all of:
+Test evaluation requires `--allow-test`, the full official test partition, a matching frozen plan,
+and an explicit paid ceiling. The plan freezes five arms, including prompt variant as well as model
+checkpoint. The first test call writes an immutable unseal receipt.
 
-- `--allow-test`;
-- the full official test partition (subsets are forbidden);
-- a frozen plan whose config, revision, partition, effort, token limit, target, and sampler match;
-- an explicit budget ceiling.
-
-The first test call writes a receipt containing the plan hash and arms. Later calls must match the
-same receipt. A different test plan requires a new experiment ID.
+Example base calls:
 
 ```bash
-uv run python evaluate_banking77_checkpoint.py --partition test --allow-test \
-  --test-plan runs/test-plan.json --target-name base \
-  --output-dir runs/test/base --budget-usd <DRY_RUN_CEILING>
+uv run python evaluate_banking77_checkpoint.py --dry-run --partition test --allow-test \
+  --test-plan runs/v2/test-plan.json --prompt-variant full_taxonomy \
+  --target-name base-full --output-dir runs/v2/test/base-full
 
-uv run python evaluate_banking77_checkpoint.py --partition test --allow-test \
-  --test-plan runs/test-plan.json --selection runs/scale/seed-13/selection.json \
-  --target-name adapter-seed-13 --output-dir runs/test/adapter-seed-13 \
-  --budget-usd <DRY_RUN_CEILING>
+uv run python evaluate_banking77_checkpoint.py --dry-run --partition test --allow-test \
+  --test-plan runs/v2/test-plan.json --prompt-variant compact \
+  --target-name base-compact --output-dir runs/v2/test/base-compact
 ```
 
-Repeat the adapter command for seeds 17 and 29. Run every command with `--dry-run` first and use
-the printed estimate to choose the explicit ceiling. Report all frozen arms regardless of outcome;
-do not reopen hyperparameter selection after seeing test labels.
+After inspecting estimates and obtaining approval, repeat with paid ceilings. Evaluate each adapter
+similarly with its selection file, compact prompt, and frozen target name. Report all five arms
+regardless of outcome; do not reopen selection after observing test results.
 
-Create the final paired, seed-aware test report from the four completed prediction files:
+Create the final report:
 
 ```bash
 uv run python compare_banking77_runs.py --partition test \
-  --test-plan runs/test-plan.json \
-  --base-predictions runs/test/base/predictions.jsonl \
-  --adapter-predictions 13=runs/test/adapter-seed-13/predictions.jsonl \
-  --adapter-predictions 17=runs/test/adapter-seed-17/predictions.jsonl \
-  --adapter-predictions 29=runs/test/adapter-seed-29/predictions.jsonl \
-  --output runs/test/comparison.json
+  --test-plan runs/v2/test-plan.json \
+  --base-full-predictions runs/v2/test/base-full/predictions.jsonl \
+  --base-compact-predictions runs/v2/test/base-compact/predictions.jsonl \
+  --adapter-predictions 13=runs/v2/test/adapter-seed-13/predictions.jsonl \
+  --adapter-predictions 17=runs/v2/test/adapter-seed-17/predictions.jsonl \
+  --adapter-predictions 29=runs/v2/test/adapter-seed-29/predictions.jsonl \
+  --output runs/v2/test/comparison.json
 ```
-
-## Artifact contract
-
-Each run records the complete config and hash, Git commit/dirty/diff hash, dataset manifest and
-partition hashes, price snapshot and drift flag, token/cost estimate, retry history, raw text,
-decoded tokens, termination reason, latency, strict and tolerant parses, and aggregate metrics.
-
-Training checkpoints include both resumable state and sampler weights with a seven-day TTL. Copy or
-extend the TTL of any checkpoint selected for longer-lived use; Tinker's documentation distinguishes
-sampler-only weights from resumable optimizer state.
 
 ## Interpretation limits
 
-This is a single English intent dataset, a LoRA-only intervention, and a fixed prompt. The official
-test set is nearly balanced but not a deployment distribution. The bootstrap quantifies example and
-training-seed variation; it does not cover prompt, dataset, model-version, or provider-infrastructure
-uncertainty. The 2026-08-07 price snapshot includes a limited-time discount and can change.
+This is one English intent dataset, one model, one LoRA recipe, and one compact prompt. The official
+test distribution is not a deployment distribution. Bootstrap intervals cover example and training
+seed variation, not prompt choice, model-version drift, provider infrastructure, or label noise.
