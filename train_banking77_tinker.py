@@ -203,7 +203,7 @@ async def run(args: argparse.Namespace) -> None:
         return
 
     if "TINKER_API_KEY" not in os.environ:
-        raise RuntimeError("Set TINKER_API_KEY before paid training")
+        raise RuntimeError("Launch paid training through `keyenv run -- ...`")
     service = tinker.ServiceClient(base_url=args.base_url)
     training_client = await service.create_lora_training_client_async(
         base_model=cfg.model_name,

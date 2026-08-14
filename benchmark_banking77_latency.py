@@ -191,7 +191,7 @@ async def run(args: argparse.Namespace) -> None:
                 f"Cannot resume latency record {benchmark_id}: contract mismatch {mismatches}"
             )
     if "TINKER_API_KEY" not in os.environ:
-        raise RuntimeError("Set TINKER_API_KEY before paid latency benchmarking")
+        raise RuntimeError("Launch paid latency benchmarking through `keyenv run -- ...`")
 
     service = tinker.ServiceClient(base_url=args.base_url)
     clients = {

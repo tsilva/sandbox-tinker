@@ -213,7 +213,7 @@ async def run(args: argparse.Namespace) -> None:
         return
 
     if "TINKER_API_KEY" not in os.environ:
-        raise RuntimeError("Set TINKER_API_KEY before paid evaluation")
+        raise RuntimeError("Launch paid evaluation through `keyenv run -- ...`")
     service = tinker.ServiceClient(base_url=args.base_url)
     sampling_client = await create_sampling_client(service, cfg.model_name, sampler_path)
     if args.partition == "test":

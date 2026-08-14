@@ -54,7 +54,7 @@ uv run python train_banking77_tinker.py --dry-run --data-size pilot \
 The checked estimate is $0.3248. A paid rerun requires a newly approved ceiling:
 
 ```bash
-uv run python train_banking77_tinker.py --data-size pilot \
+keyenv run -- uv run python train_banking77_tinker.py --data-size pilot \
   --learning-rate 2e-4 --seed 13 --run-dir runs/v2/pilot/seed-13 \
   --budget-usd <APPROVED_CEILING>
 ```
@@ -63,6 +63,55 @@ Each epoch checkpoint is selected by highest strict dev macro-F1, then lowest in
 training tokens, and earliest step. If the pilot passes the decision check, dry-run and then train
 the scale subset for seeds 13, 17, and 29 in separate immutable directories. The checked scale
 estimate is $0.6465 per seed.
+
+## Scale dev result (2026-08-07)
+
+The approved 1,848-example scale run completed for all three preregistered seeds. The selected
+checkpoints were:
+
+| Seed | Selected step | Epoch | Accuracy | Macro-F1 | Invalid rate |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 13 | 348 | 3 | 0.8753 | 0.8778 | 0.0078 |
+| 17 | 232 | 2 | 0.8831 | 0.8859 | 0.0091 |
+| 29 | 348 | 3 | 0.8805 | 0.8855 | 0.0130 |
+| Mean | — | — | 0.8797 | 0.8831 | 0.0100 |
+
+The mean macro-F1 at the three epoch boundaries was `0.8098`, `0.8729`, and `0.8781`. This is
+strong evidence of diminishing returns by epoch three, but not universal saturation: seed 17
+regressed after epoch two while seed 29 continued to improve. Selected-checkpoint macro-F1 had a
+sample standard deviation of `0.0045` across seeds.
+
+Against `base-compact`, the paired seed-aware bootstrap median macro-F1 delta was `+0.6580` with a
+95% interval of `[+0.6291, +0.6867]`. Against `base-full`, it was `+0.1541` with a 95% interval of
+`[+0.1283, +0.1811]`. Mean prompt tokens were `9.68%` of `base-full`; generated tokens were
+`100.64%`. Every non-latency dev gate passed. The estimated scale-run usage was `$1.7010` under the
+stored conservative pricing model, below the approved `$1.9395` ceiling.
+
+The comparison artifact is `runs/v2/dev/scale-comparison.json`. At this scale stage, the latency
+gate was unrun and the official test split remained sealed, so the experiment was not yet eligible
+for promotion or a frozen five-arm test plan.
+
+### Full-data follow-up (2026-08-07)
+
+One approved seed-13 follow-up used the complete 9,222-example clean training pool. Its epoch
+boundary results were:
+
+| Step | Epoch | Accuracy | Macro-F1 | Invalid rate |
+| ---: | ---: | ---: | ---: | ---: |
+| 577 | 1 | 0.8987 | 0.8971 | 0.0000 |
+| 1,154 | 2 | 0.9091 | 0.9100 | 0.0039 |
+| 1,731 | 3 | 0.9299 | 0.9290 | 0.0000 |
+
+Epoch three was selected. Against the same seed's selected 1,848-example scale checkpoint, its
+paired bootstrap macro-F1 delta was `+0.0519`, with a 95% interval of `[+0.0360, +0.0690]`. This
+shows that additional distinct training examples were materially more useful than the scale
+experiment alone suggested. Estimated usage from the realized token counts was `$2.5173`, below
+the approved `$2.60` ceiling.
+
+This is a single-seed follow-up, so it is strong evidence about the seed-13 data-size effect but
+does not replace the preregistered three-seed uncertainty estimate. Its artifacts are in
+`runs/v2/full/seed-13/`. The latency gate remains untouched. A later explicit request unsealed the
+official test only for this checkpoint under the one-arm plan documented below.
 
 ## Dev evaluation
 
@@ -141,6 +190,23 @@ uv run python compare_banking77_runs.py \
 ```
 
 ## Sealed test
+
+### One-arm full-data test result (2026-08-07)
+
+The selected full-data seed-13 checkpoint was frozen in a separate immutable one-arm plan and
+evaluated once on all 3,080 official test examples. It achieved `0.9406` accuracy and `0.9410`
+macro-F1, with 2 invalid outputs (`0.00065`). The 95% Wilson interval for accuracy is
+`[0.9317, 0.9484]`; a 10,000-replicate label-stratified bootstrap interval for macro-F1 is
+`[0.9324, 0.9489]`.
+
+The model made 2,897 correct predictions and 183 errors. Its weakest class was
+`balance_not_updated_after_bank_transfer` (`0.7711` F1), followed by `pending_transfer` (`0.8205`)
+and `top_up_reverted` (`0.8537`). Six classes had perfect precision and recall. Realized estimated
+usage was `$0.1119`, below the approved `$0.22` ceiling. Predictions and their full metrics are in
+`runs/v2/full/test/seed-13/`.
+
+This one-arm result does not provide test-set comparisons against either base prompt or the other
+training seeds. The original five-arm promotion test described below remains unrun.
 
 Test evaluation requires `--allow-test`, the full official test partition, a matching frozen plan,
 and an explicit paid ceiling. The plan freezes five arms, including prompt variant as well as model
