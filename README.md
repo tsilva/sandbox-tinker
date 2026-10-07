@@ -1,4 +1,8 @@
-# Inkling-Small × Banking77 schema distillation
+<p align="center">
+  <!-- repo-tagline:start -->
+  <strong>🧪 Test whether LoRA can internalize Banking77 classification labels 🏷️</strong>
+  <!-- repo-tagline:end -->
+</p>
 
 This repository tests whether a LoRA can internalize Banking77's 77-label output schema so that
 `thinkingmachines/Inkling-Small` can classify requests with a short production prompt.
