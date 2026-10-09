@@ -30,3 +30,5 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.uv]
 package = false
+exclude-newer = "7 days"
+constraint-dependencies = ["multidict>=6.9.1", "urllib3>=2.8.0", "mistralai!=2.4.6", "guardrails-ai!=0.10.1"]
