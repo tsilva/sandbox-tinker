@@ -1,6 +1,9 @@
 required-version = "==0.11.13"
 exclude-newer = "7 days"
+# Project-tested Inkling renderer compatibility; avoids the cookbook's vulnerable cap.
+override-dependencies = ["transformers==5.14.1"]
 constraint-dependencies = [
+  "transformers>=5.14.1",
   "guardrails-ai!=0.10.1",
   "h2>=4.4.1",
   "mistralai!=2.4.6",

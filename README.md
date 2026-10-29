@@ -118,3 +118,15 @@ removed training row, source checksum, stable example ID, class count, and parti
 - `banking77_experiment/` — data, rendering, training, metrics, pricing, and artifact contracts
 
 Generated runs live under ignored `runs/`. Completed paid run directories are immutable.
+
+### Dependency security
+
+The committed lock uses an aged, unyanked Transformers release at or above
+5.14.1. A project-scoped override applies to both project and standalone uv configuration,
+because the cookbook currently caps Transformers below the patched release.
+The real Inkling tokenizer/renderer contract and all experiment tests must pass
+before this override is published. It is not a claim about every cookbook model.
+The security floor applies to both configurations,
+covering chat-template path traversal and the earlier custom-generation trust
+consent issue. Install with `uv sync --locked --config-file uv.toml`; the
+seven-day release exclusion and existing bad-package constraints remain active.
