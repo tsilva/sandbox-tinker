@@ -5,3 +5,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 runs/
+
+# Private repository captures and migration evidence
+/INBOX.md
+/.internal/
+/.local/repo-inbox/

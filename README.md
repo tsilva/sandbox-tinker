@@ -29,17 +29,9 @@ uv run ruff check .
 uv run pytest -q
 ```
 
-Private credentials are declared in the committed, value-free `.keyenv.toml` and stored in the
-macOS Keychain. Store and verify the Tinker key once:
-
-```bash
-keyenv set TINKER_API_KEY
-keyenv doctor
-```
-
-Run paid commands through `keyenv run -- ...`; Python receives the key through `os.environ` without
-writing it to `.env` or a command argument. Dependencies are locked in `uv.lock`; releases newer
-than seven days and known-bad package versions remain constrained.
+Live commands read a supplied `TINKER_API_KEY` from the application environment.
+Local analysis and dry runs need no credentials. Dependencies remain locked in
+`uv.lock` with the existing release-age and security constraints.
 
 ## Safe preflight
 

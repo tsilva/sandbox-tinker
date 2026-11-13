@@ -54,7 +54,7 @@ uv run python train_banking77_tinker.py --dry-run --data-size pilot \
 The checked estimate is $0.3248. A paid rerun requires a newly approved ceiling:
 
 ```bash
-keyenv run -- uv run python train_banking77_tinker.py --data-size pilot \
+uv run python train_banking77_tinker.py --data-size pilot \
   --learning-rate 2e-4 --seed 13 --run-dir runs/v2/pilot/seed-13 \
   --budget-usd <APPROVED_CEILING>
 ```
